@@ -9,3 +9,7 @@ export {
   serializarToken, parsearMensaje, construirDeepLink,
   leerCmdDeUrl, detectarAutocompletar,
 } from "./commands.js";
+export {
+  crearNotificacion, cargarNotificaciones, suscribirNotificaciones,
+  cargarUltimaVez, marcarVistoAhora,
+} from "./notifications.js";

@@ -17,9 +17,10 @@
  * Ref expone: openPanel(), openConversation(user)
  * ======================================================================== */
 import React, { useState, useEffect, useRef, useMemo, forwardRef, useImperativeHandle } from "react";
-import { X, Send, ArrowLeft, MessageCircle, Check, CheckCheck } from "lucide-react";
+import { X, Send, ArrowLeft, MessageCircle, Check, CheckCheck, Package, Layers, Map, RotateCcw, ShoppingCart, Activity } from "lucide-react";
 import { cargarTodosMensajes, enviarMensaje, marcarLeidos, suscribirMensajes } from "./data.js";
 import { serializarToken, parsearMensaje, construirDeepLink, detectarAutocompletar } from "./commands.js";
+import { cargarNotificaciones, suscribirNotificaciones, cargarUltimaVez, marcarVistoAhora } from "./notifications.js";
 
 const AVATAR_COLORS = ["#6366f1","#0891b2","#be185d","#65a30d","#f59e0b","#ef4444","#10b981","#8b5cf6"];
 function avatarColor(userId) {
@@ -106,7 +107,115 @@ function MentionText({ texto, miembros, esPropio }) {
   return <>{parts.length ? parts : texto}</>;
 }
 
-// ── Vista lista de conversaciones ───────────────────────────────────────────
+// Icono por tipo de evento de app.
+const EVENT_ICONS = { pedido: Package, compra: ShoppingCart, retorno: RotateCcw, planning: Layers, plano: Map };
+function EventIcon({ tipo, size = 18 }) {
+  const Ic = EVENT_ICONS[tipo] || Activity;
+  return <Ic size={size} />;
+}
+
+// ── Feed mezclado: eventos de apps + conversaciones de chat, por fecha ───────
+function FeedView({ otros, allMessages, notifs, myId, myEmail, appId, onSelectConv, onEvent }) {
+  const lastMsg = (uid) => {
+    const msgs = allMessages.filter(m =>
+      (m.from_user_id === myId && m.to_user_id === uid) ||
+      (m.from_user_id === uid && m.to_user_id === myId));
+    return msgs[msgs.length - 1] ?? null;
+  };
+  const unreadFrom = (uid) => allMessages.filter(m => m.from_user_id === uid && m.to_user_id === myId && !m.is_read).length;
+
+  // Items de conversación: uno por miembro con el que hay mensajes.
+  const convItems = otros
+    .map(m => ({ kind: "conv", member: m, last: lastMsg(m.user_id), unread: unreadFrom(m.user_id) }))
+    .filter(it => it.last);
+
+  // Items de evento: notificaciones de apps (ignorar las propias del usuario).
+  const eventItems = (notifs || [])
+    .filter(n => n.actor_id !== myId)
+    .map(n => ({ kind: "event", notif: n }));
+
+  // Mezclar y ordenar por fecha descendente.
+  const items = [...convItems, ...eventItems].sort((a, b) => {
+    const ta = a.kind === "conv" ? a.last.created_at : a.notif.created_at;
+    const tb = b.kind === "conv" ? b.last.created_at : b.notif.created_at;
+    return new Date(tb) - new Date(ta);
+  });
+
+  if (!items.length) return (
+    <div style={{ flex: 1, display: "grid", placeItems: "center", color: "var(--text-2,#6b7280)", fontSize: 13, padding: 20, textAlign: "center" }}>
+      Sin actividad todavía.<br />Los mensajes y eventos de tu equipo aparecerán aquí.
+    </div>
+  );
+
+  return (
+    <div style={{ flex: 1, overflowY: "auto" }}>
+      {items.map((it, i) => {
+        if (it.kind === "conv") {
+          const { member, last, unread } = it;
+          return (
+            <button key={`c-${member.user_id}`} onClick={() => onSelectConv(member)}
+              style={feedRowStyle}
+              onMouseEnter={e => e.currentTarget.style.background = "var(--surface-2,#f3f4f6)"}
+              onMouseLeave={e => e.currentTarget.style.background = "none"}>
+              <Avatar member={member} size={34} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ fontSize: 13, fontWeight: unread ? 700 : 500, color: "var(--text,#111)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 150 }}>
+                    {member.nombre || member.email || "Usuario"}
+                  </span>
+                  <span style={{ fontSize: 10.5, color: "var(--text-2,#6b7280)", flexShrink: 0 }}>{formatHora(last.created_at)}</span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontSize: 12, color: unread ? "var(--brand,#6366f1)" : "var(--text-2,#6b7280)", fontWeight: unread ? 600 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 200 }}>
+                    {(last.from_user_id === myId ? "Tú: " : "") + last.message}
+                  </span>
+                  {unread > 0 && <span style={{ minWidth: 18, height: 18, borderRadius: 999, background: "var(--brand,#6366f1)", color: "#fff", fontSize: 10.5, fontWeight: 700, display: "grid", placeItems: "center", padding: "0 5px", flexShrink: 0 }}>{unread}</span>}
+                </div>
+              </div>
+            </button>
+          );
+        }
+        // Evento de app
+        const n = it.notif;
+        const esOtraApp = n.app_id !== appId;
+        return (
+          <button key={`e-${n.id}`} onClick={() => onEvent(n)}
+            style={feedRowStyle}
+            onMouseEnter={e => e.currentTarget.style.background = "var(--surface-2,#f3f4f6)"}
+            onMouseLeave={e => e.currentTarget.style.background = "none"}>
+            <div style={{ position: "relative", flexShrink: 0 }}>
+              <Avatar member={{ user_id: n.actor_id, nombre: n.actor_nombre }} size={34} />
+              <div style={{ position: "absolute", bottom: -3, right: -3, width: 18, height: 18, borderRadius: 999, background: "var(--surface,#fff)", border: "1px solid var(--border,#e5e7eb)", display: "grid", placeItems: "center", color: "var(--text-2,#6b7280)" }}>
+                <EventIcon tipo={n.tipo} size={11} />
+              </div>
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <span style={{ fontSize: 13, color: "var(--text,#111)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 170 }}>
+                  {n.titulo}
+                </span>
+                <span style={{ fontSize: 10.5, color: "var(--text-2,#6b7280)", flexShrink: 0 }}>{formatHora(n.created_at)}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontSize: 12, color: "var(--text-2,#6b7280)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 200 }}>
+                  {n.recurso_label || ""}{esOtraApp ? ` · ${n.app_id}` : ""}
+                </span>
+              </div>
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+const feedRowStyle = {
+  display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "10px 14px",
+  border: "none", background: "none", cursor: "pointer",
+  borderBottom: "1px solid var(--border,#e5e7eb)", textAlign: "left",
+};
+
+// ── Vista lista de conversaciones (solo chat, accesible desde "Nuevo") ──────
 function ListView({ otros, allMessages, myId, myEmail, onSelect }) {
   const lastMsg = (uid) => {
     const msgs = allMessages.filter(m =>
@@ -326,14 +435,18 @@ function ConvView({ partner, messages, myId, onBack, onSend, miembros, appId, co
 }
 
 // ── ChatBase (componente principal) ─────────────────────────────────────────
+// Es el "centro de notificaciones": feed mezclado de chat + eventos de apps.
+// onEventoLocal(cmd): la app ejecuta un evento de SÍ MISMA (navegar al recurso).
 export const ChatBase = forwardRef(function ChatBase({
   sb, appId, empresa, currentUser, miembros = [],
-  comandos = [], resolveAppUrl, onUnreadChange,
+  comandos = [], resolveAppUrl, onUnreadChange, onEventoLocal,
 }, ref) {
   const [open, setOpen] = useState(false);
-  const [view, setView] = useState("list");
+  const [view, setView] = useState("feed");
   const [partner, setPartner] = useState(null);
   const [allMessages, setAllMessages] = useState([]);
+  const [notifs, setNotifs] = useState([]);
+  const [lastSeen, setLastSeen] = useState(null);
 
   const myId = currentUser?.id;
   const myEmail = currentUser?.email;
@@ -344,6 +457,7 @@ export const ChatBase = forwardRef(function ChatBase({
     openPanel: () => setOpen(true),
   }));
 
+  // Chat: carga + realtime
   useEffect(() => {
     if (!companyId || !myId || !sb) return;
     cargarTodosMensajes(sb, companyId).then(setAllMessages);
@@ -353,6 +467,18 @@ export const ChatBase = forwardRef(function ChatBase({
     return unsub;
   }, [companyId, myId, sb]);
 
+  // Notificaciones de eventos: carga + realtime + última vez visto
+  useEffect(() => {
+    if (!companyId || !myId || !sb) return;
+    cargarNotificaciones(sb, companyId).then(setNotifs);
+    cargarUltimaVez(sb, companyId, myId).then(setLastSeen);
+    const unsub = suscribirNotificaciones(sb, companyId, (n) => {
+      setNotifs(prev => prev.some(x => x.id === n.id) ? prev : [n, ...prev]);
+    });
+    return unsub;
+  }, [companyId, myId, sb]);
+
+  // Marcar leído al entrar en una conversación de chat
   useEffect(() => {
     if (partner && companyId && myId && open && view === "conv") {
       marcarLeidos(sb, companyId, myId, partner.user_id);
@@ -361,6 +487,15 @@ export const ChatBase = forwardRef(function ChatBase({
     }
   }, [partner?.user_id, view, open]);
 
+  // Al ABRIR la campanita: marcar todos los eventos como vistos (badge a 0 para notifs)
+  useEffect(() => {
+    if (open && companyId && myId) {
+      const now = new Date().toISOString();
+      marcarVistoAhora(sb, companyId, myId);
+      setLastSeen(now);
+    }
+  }, [open]);
+
   const convMessages = useMemo(() => {
     if (!partner) return [];
     return allMessages.filter(m =>
@@ -368,8 +503,14 @@ export const ChatBase = forwardRef(function ChatBase({
       (m.from_user_id === partner.user_id && m.to_user_id === myId));
   }, [allMessages, partner?.user_id, myId]);
 
-  const totalUnread = useMemo(() =>
+  // Badge combinado: chat no leído + eventos (de otros) más nuevos que lastSeen
+  const chatUnread = useMemo(() =>
     allMessages.filter(m => m.to_user_id === myId && !m.is_read).length, [allMessages, myId]);
+  const notifUnread = useMemo(() => {
+    if (!lastSeen) return notifs.filter(n => n.actor_id !== myId).length;
+    return notifs.filter(n => n.actor_id !== myId && new Date(n.created_at) > new Date(lastSeen)).length;
+  }, [notifs, lastSeen, myId]);
+  const totalUnread = chatUnread + notifUnread;
   useEffect(() => { onUnreadChange?.(totalUnread); }, [totalUnread]);
 
   const otros = useMemo(() => miembros.filter(m => m.user_id !== myId), [miembros, myId]);
@@ -377,7 +518,6 @@ export const ChatBase = forwardRef(function ChatBase({
   const handleSend = async (msg) => {
     const sent = await enviarMensaje(sb, companyId, myId, partner.user_id, msg);
     setAllMessages(prev => [...prev, { ...sent, is_read: false }]);
-    // Fanout a @mencionados distintos del interlocutor
     const handles = [...msg.matchAll(/@([\w.]+)/g)].map(m => m[1].toLowerCase());
     if (handles.length) {
       for (const mb of otros) {
@@ -388,7 +528,33 @@ export const ChatBase = forwardRef(function ChatBase({
     }
   };
 
+  // Click en un evento del feed: misma app → ejecutar local; otra app → deep-link.
+  const handleEvent = (n) => {
+    if (n.app_id === appId) {
+      if (n.cmd) {
+        // cmd serializado tipo "s.OA_00200" → {trigger, valor}
+        const dot = n.cmd.indexOf(".");
+        const trigger = dot >= 0 && n.cmd.slice(0, dot) === "h" ? "#" : "/";
+        const valor = dot >= 0 ? n.cmd.slice(dot + 1).replace(/~/g, " ") : n.cmd;
+        onEventoLocal?.({ trigger, valor, tipo: n.tipo, notif: n });
+      }
+      setOpen(false);
+    } else {
+      const url = resolveAppUrl?.(n.app_id);
+      if (url && n.cmd) {
+        const sep = url.includes("?") ? "&" : "?";
+        window.open(`${url}${sep}cmd=${encodeURIComponent(n.cmd)}`, "_blank", "noreferrer");
+      } else if (url) {
+        window.open(url, "_blank", "noreferrer");
+      }
+    }
+  };
+
   if (!companyId || !myId) return null;
+
+  const headerTitle = view === "conv" && partner
+    ? (partner.nombre || partner.email || "Conversación")
+    : view === "list" ? "Nuevo mensaje" : "Notificaciones";
 
   return (
     <>
@@ -399,25 +565,39 @@ export const ChatBase = forwardRef(function ChatBase({
           display: "flex", flexDirection: "column", overflow: "hidden" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "13px 16px",
             borderBottom: "1px solid var(--border,#e5e7eb)", flexShrink: 0, background: "var(--brand,#6366f1)" }}>
-            <MessageCircle size={18} color="#fff" />
-            <span style={{ flex: 1, fontWeight: 700, fontSize: 14, color: "#fff" }}>
-              {view === "conv" && partner ? (partner.nombre || partner.email || "Conversación") : "Mensajes"}
-            </span>
+            {view === "feed"
+              ? <Activity size={18} color="#fff" />
+              : <button onClick={() => { setView("feed"); setPartner(null); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#fff", padding: 0, display: "flex" }}><ArrowLeft size={18} /></button>}
+            <span style={{ flex: 1, fontWeight: 700, fontSize: 14, color: "#fff" }}>{headerTitle}</span>
+            {view === "feed" && (
+              <button onClick={() => setView("list")} title="Nuevo mensaje"
+                style={{ background: "rgba(255,255,255,0.15)", border: "none", borderRadius: 8, cursor: "pointer", color: "#fff", padding: "4px 6px", display: "flex" }}>
+                <MessageCircle size={15} />
+              </button>
+            )}
             <button onClick={() => setOpen(false)} style={{ background: "rgba(255,255,255,0.15)", border: "none",
               borderRadius: 8, cursor: "pointer", color: "#fff", padding: 5, display: "flex" }}>
               <X size={15} />
             </button>
           </div>
-          {view === "list"
-            ? <ListView otros={otros} allMessages={allMessages} myId={myId} myEmail={myEmail} onSelect={(m) => { setPartner(m); setView("conv"); }} />
-            : <ConvView partner={partner} messages={convMessages} myId={myId}
-                onBack={() => { setView("list"); setPartner(null); }} onSend={handleSend}
-                miembros={otros} appId={appId} comandos={comandos} resolveAppUrl={resolveAppUrl} />}
+          {view === "feed" && (
+            <FeedView otros={otros} allMessages={allMessages} notifs={notifs} myId={myId} myEmail={myEmail}
+              appId={appId} onSelectConv={(m) => { setPartner(m); setView("conv"); }} onEvent={handleEvent} />
+          )}
+          {view === "list" && (
+            <ListView otros={otros} allMessages={allMessages} myId={myId} myEmail={myEmail}
+              onSelect={(m) => { setPartner(m); setView("conv"); }} />
+          )}
+          {view === "conv" && (
+            <ConvView partner={partner} messages={convMessages} myId={myId}
+              onBack={() => { setView("feed"); setPartner(null); }} onSend={handleSend}
+              miembros={otros} appId={appId} comandos={comandos} resolveAppUrl={resolveAppUrl} />
+          )}
         </div>
       )}
 
       {!open && (
-        <button onClick={() => setOpen(true)} title="Mensajes"
+        <button onClick={() => setOpen(true)} title="Notificaciones"
           style={{ position: "fixed", bottom: 24, right: 24, zIndex: 9999, width: 50, height: 50,
             borderRadius: "50%", background: "var(--brand,#6366f1)", color: "#fff", border: "none",
             cursor: "pointer", boxShadow: "0 4px 20px rgba(99,102,241,0.4)", display: "grid", placeItems: "center" }}>

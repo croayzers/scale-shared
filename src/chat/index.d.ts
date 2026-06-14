@@ -30,7 +30,24 @@ export interface ChatBaseProps {
   comandos?: ChatComando[];
   resolveAppUrl?: (appId: string) => string | null;
   onUnreadChange?: (n: number) => void;
+  onEventoLocal?: (e: { trigger: string; valor: string; tipo: string; notif: any }) => void;
 }
+
+export interface NotificacionInput {
+  companyId: string;
+  actorId?: string | null;
+  actorNombre?: string | null;
+  appId: string;
+  tipo: string;
+  titulo: string;
+  recursoLabel?: string | null;
+  cmd?: string | null;
+}
+export function crearNotificacion(sb: any, n: NotificacionInput): Promise<any>;
+export function cargarNotificaciones(sb: any, companyId: string, limit?: number): Promise<any[]>;
+export function suscribirNotificaciones(sb: any, companyId: string, onNew: (n: any) => void): () => void;
+export function cargarUltimaVez(sb: any, companyId: string, userId: string): Promise<string | null>;
+export function marcarVistoAhora(sb: any, companyId: string, userId: string): Promise<void>;
 
 export interface ChatBaseHandle {
   openPanel: () => void;
