@@ -4,10 +4,10 @@
   "description": "Código común entre las apps Scale: chat cross-app, registro de apps.",
   "type": "module",
   "exports": {
-    "./chat": "./src/chat/index.js",
+    "./chat": { "types": "./src/chat/index.d.ts", "default": "./src/chat/index.js" },
     "./chat/lib": "./src/chat/data.js",
     "./chat/commands": "./src/chat/commands.js",
-    "./registry": "./src/registry/index.js"
+    "./registry": { "types": "./src/registry/index.d.ts", "default": "./src/registry/index.js" }
   },
   "files": [
     "src"
