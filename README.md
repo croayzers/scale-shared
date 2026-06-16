@@ -7,6 +7,7 @@ dependencia git (no se publica en npm).
 
 - `@scale/shared/chat` — chat cross-app (ChatBase, BellButton, PresenceAvatars, lib de datos, comandos)
 - `@scale/shared/registry` — catálogo de apps (apps_registry)
+- `@scale/shared/connectors` — origen de datos BYOK por empresa (Excel/CSV, SharePoint List, Excel en SharePoint, Business Central)
 
 ## Cómo lo usa una app (React/Vite o Next)
 

@@ -1,13 +1,14 @@
 {
   "name": "@scale/shared",
   "version": "0.1.0",
-  "description": "Código común entre las apps Scale: chat cross-app, registro de apps.",
+  "description": "Código común entre las apps Scale: chat cross-app, registro de apps, conectores BYOK.",
   "type": "module",
   "exports": {
     "./chat": { "types": "./src/chat/index.d.ts", "default": "./src/chat/index.js" },
     "./chat/lib": "./src/chat/data.js",
     "./chat/commands": "./src/chat/commands.js",
-    "./registry": { "types": "./src/registry/index.d.ts", "default": "./src/registry/index.js" }
+    "./registry": { "types": "./src/registry/index.d.ts", "default": "./src/registry/index.js" },
+    "./connectors": { "types": "./src/connectors/index.d.ts", "default": "./src/connectors/index.js" }
   },
   "files": [
     "src"
