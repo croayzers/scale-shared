@@ -4,7 +4,7 @@
 
 ```jsx
 import { useState, useEffect, useRef } from "react";
-import { ChatBase, BellButton, cargarMiembros, leerCmdDeUrl } from "@scale/shared/chat";
+import { ChatBase, BellButton, PresenceAvatars, cargarMiembros, leerCmdDeUrl } from "@scale/shared/chat";
 import { cargarApps, crearResolveAppUrl } from "@scale/shared/registry";
 import { sb } from "./lib/supabase";   // cliente de la app
 
@@ -31,8 +31,15 @@ function useChat(empresa, currentUser) {
 
 En el header:
 ```jsx
+<PresenceAvatars sb={sb()} companyId={empresa?.id} currentUser={currentUser} appId={APP_ID} />
 <BellButton unread={unread} onClick={() => chatRef.current?.openPanel()} />
 ```
+
+`PresenceAvatars` muestra los avatares (iniciales + color) de los compañeros de
+empresa conectados ahora mismo, **en cualquier app Scale** (un único canal de
+Realtime Presence por empresa: `presence-company-{companyId}`). No requiere
+estado ni props adicionales en la app — solo `sb`, `companyId`, `currentUser`
+y `appId`. Devuelve `null` si no hay nadie más conectado.
 
 Al final del árbol:
 ```jsx

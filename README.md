@@ -5,7 +5,7 @@ dependencia git (no se publica en npm).
 
 ## Qué incluye
 
-- `@scale/shared/chat` — chat cross-app (ChatBase, BellButton, lib de datos, comandos)
+- `@scale/shared/chat` — chat cross-app (ChatBase, BellButton, PresenceAvatars, lib de datos, comandos)
 - `@scale/shared/registry` — catálogo de apps (apps_registry)
 
 ## Cómo lo usa una app (React/Vite o Next)

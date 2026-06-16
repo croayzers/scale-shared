@@ -76,3 +76,31 @@ export function parsearMensaje(texto: string): Array<{ tipo: string; valor: stri
 export function construirDeepLink(appUrl: string | null, trigger: string, valor: string): string | null;
 export function leerCmdDeUrl(): { trigger: string; valor: string } | null;
 export function detectarAutocompletar(texto: string, cursor: number, comandos: ChatComando[], miembros: ChatMember[]): any;
+
+export interface PresenceUser {
+  user_id: string;
+  email?: string | null;
+  nombre?: string | null;
+  app_id?: string;
+  online_at?: string;
+}
+export function suscribirPresencia(
+  sb: any,
+  companyId: string,
+  currentUser: { id: string; email?: string },
+  appId: string,
+  onSync: (users: PresenceUser[]) => void
+): () => void;
+
+export function PresenceAvatars(props: {
+  sb: any;
+  companyId: string;
+  currentUser: { id: string; email?: string } | null;
+  appId: string;
+  max?: number;
+  size?: number;
+}): React.JSX.Element | null;
+
+export function Avatar(props: { member: ChatMember | PresenceUser; size?: number }): React.JSX.Element;
+export function avatarColor(userId: string | null | undefined): string;
+export function iniciales(nombre: string | null | undefined): string;
