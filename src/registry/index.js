@@ -8,6 +8,7 @@ export const FALLBACK_APPS = [
   { id: "sscale", nombre: "S-Scale", emoji: "📱", color: "#8b5cf6", url_prod: "https://social.thescaleapps.com",    url_dev: "http://localhost:3001", activa: true,  orden: 30 },
   { id: "escale", nombre: "E-Scale", emoji: "🏛️", color: "#10b981", url_prod: "https://events.thescaleapps.com",    url_dev: "http://localhost:5173", activa: true,  orden: 40 },
   { id: "ascale", nombre: "A-Scale", emoji: "📋", color: "#d97706", url_prod: "https://appcc.thescaleapps.com",     url_dev: "http://localhost:5183", activa: true,  orden: 50 },
+  { id: "nscale", nombre: "N-Scale", emoji: "📋", color: "#0e7490", url_prod: "https://nscale.thescaleapps.com",    url_dev: "http://localhost:5184", activa: true,  orden: 60 },
 ];
 
 let _cache = null;
