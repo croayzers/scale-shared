@@ -17,11 +17,12 @@
  * Ref expone: openPanel(), openConversation(user)
  * ======================================================================== */
 import React, { useState, useEffect, useRef, useMemo, forwardRef, useImperativeHandle } from "react";
-import { X, Send, ArrowLeft, MessageCircle, Check, CheckCheck, Package, Layers, Map, RotateCcw, ShoppingCart, Activity } from "lucide-react";
+import { X, Send, ArrowLeft, MessageCircle, Check, CheckCheck, Package, Layers, Map, RotateCcw, ShoppingCart, Activity, Sparkles, ChevronDown, Bot, Loader } from "lucide-react";
 import { cargarTodosMensajes, enviarMensaje, marcarLeidos, suscribirMensajes } from "./data.js";
 import { serializarToken, parsearMensaje, construirDeepLink, detectarAutocompletar } from "./commands.js";
 import { cargarNotificaciones, suscribirNotificaciones, cargarUltimaVez, marcarVistoAhora } from "./notifications.js";
 import { avatarColor, Avatar } from "./avatar.jsx";
+import { PROVEEDORES, cargarKeys, guardarKeys, llamarLLM } from "../ia/llm.js";
 
 function formatHora(iso) {
   if (!iso) return "";
@@ -411,12 +412,126 @@ function ConvView({ partner, messages, myId, onBack, onSend, miembros, appId, co
   );
 }
 
+// ── Vista IA ─────────────────────────────────────────────────────────────────
+// Asistente integrado en el panel. Conoce el feed (notifs + mensajes recientes)
+// como contexto, ofrece prompts predefinidos por app y permite elegir proveedor.
+function IAView({ aiProvider, aiKeys, system, prompts = [], feedTexto, appId, onTool, tools = [] }) {
+  const [proveedor, setProveedor] = useState(aiProvider || "claude");
+  const [keysLocal, setKeysLocal] = useState(cargarKeys);
+  const [msgs, setMsgs] = useState([]);
+  const [input, setInput] = useState("");
+  const [cargando, setCargando] = useState(false);
+  const [showPrompts, setShowPrompts] = useState(false);
+  const [showKeys, setShowKeys] = useState(false);
+  const endRef = useRef(null);
+  const keys = { ...keysLocal, ...(aiKeys || {}) };
+  const prov = PROVEEDORES.find((p) => p.id === proveedor) || PROVEEDORES[0];
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs, cargando]);
+  const setKey = (id, v) => { const k = { ...keysLocal, [id]: v }; setKeysLocal(k); guardarKeys(k); };
+
+  async function enviar(textoArg) {
+    const texto = (textoArg ?? input).trim();
+    if (!texto || cargando) return;
+    if (!keys[proveedor]) { setShowKeys(true); return; }
+    setInput(""); setShowPrompts(false);
+    setMsgs((m) => [...m, { rol: "user", texto }]);
+    setCargando(true);
+    // Contexto: feed de notificaciones/mensajes que recibió el usuario.
+    const ctx = feedTexto ? `Actividad reciente que ha recibido el usuario (mensajes y eventos del equipo):\n${feedTexto}\n\n` : "";
+    const hist = [{ role: "user", content: ctx + "Petición: " + texto }];
+    const acciones = [];
+    try {
+      for (let paso = 0; paso < (tools.length ? 6 : 1); paso++) {
+        const { text, toolCalls } = await llamarLLM(proveedor, { apiKey: keys[proveedor], modelo: prov.modelo, system, messages: hist, tools });
+        if (!toolCalls.length || !onTool) { setMsgs((m) => [...m, { rol: "bot", texto: text || "Hecho.", acciones }]); break; }
+        hist.push({ role: "assistant", content: [...(text ? [{ type: "text", text }] : []), ...toolCalls.map((tc) => ({ type: "tool_use", id: tc.id, name: tc.name, input: tc.input }))] });
+        const results = [];
+        for (const tc of toolCalls) { const res = onTool(tc.name, tc.input) || {}; acciones.push(res.resumen || res.error || tc.name); results.push({ type: "tool_result", tool_use_id: tc.id, name: tc.name, content: JSON.stringify({ resumen: res.resumen, error: res.error, datos: res.datos }) }); }
+        hist.push({ role: "user", content: results });
+        if (paso === 5) setMsgs((m) => [...m, { rol: "bot", texto: "Hecho (límite de pasos).", acciones }]);
+      }
+    } catch (e) {
+      const msg = e?.message || String(e);
+      const sinTokens = /\b429\b|quota|insufficient|billing|credit|exhaust|saldo|límite|limit reached|out of/i.test(msg);
+      setMsgs((m) => [...m, { rol: "bot", texto: sinTokens ? `La IA «${prov.nombre}» no tiene tokens (sin saldo o límite). Contacta con tu administrador para revisar la API de la empresa.` : "Error: " + msg }]);
+    } finally { setCargando(false); }
+  }
+
+  return (
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+      {/* Barra de herramientas: proveedor + prompts + keys */}
+      <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 12px", borderBottom: "1px solid var(--border,#e5e7eb)", flexShrink: 0, flexWrap: "wrap" }}>
+        <select value={proveedor} onChange={(e) => setProveedor(e.target.value)}
+          style={{ fontSize: 12, padding: "4px 6px", borderRadius: 7, border: "1px solid var(--border-strong,#d1d5db)", background: "var(--surface,#fff)", color: "var(--text,#111)" }}>
+          {PROVEEDORES.map((p) => <option key={p.id} value={p.id}>{p.nombre}{keys[p.id] ? "" : " 🔑"}</option>)}
+        </select>
+        {prompts.length > 0 && (
+          <div style={{ position: "relative" }}>
+            <button onClick={() => setShowPrompts((v) => !v)} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, padding: "5px 9px", borderRadius: 7, border: "1px solid var(--border-strong,#d1d5db)", background: "var(--surface,#fff)", color: "var(--text-2,#6b7280)", cursor: "pointer" }}>
+              Prompts <ChevronDown size={13} />
+            </button>
+            {showPrompts && (<>
+              <div onClick={() => setShowPrompts(false)} style={{ position: "fixed", inset: 0, zIndex: 5 }} />
+              <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 6, width: 240, maxHeight: 240, overflowY: "auto", background: "var(--surface,#fff)", border: "1px solid var(--border,#e5e7eb)", borderRadius: 10, boxShadow: "0 8px 28px rgba(0,0,0,0.18)", padding: 5 }}>
+                {prompts.map((p, i) => (
+                  <button key={i} onClick={() => enviar(typeof p === "string" ? p : p.prompt)} style={{ display: "block", width: "100%", textAlign: "left", fontSize: 12.5, padding: "7px 9px", border: "none", borderRadius: 7, background: "none", color: "var(--text,#111)", cursor: "pointer" }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = "var(--surface-2,#f3f4f6)"} onMouseLeave={(e) => e.currentTarget.style.background = "none"}>
+                    {typeof p === "string" ? p : p.label || p.prompt}
+                  </button>
+                ))}
+              </div>
+            </>)}
+          </div>
+        )}
+        <button onClick={() => setShowKeys((v) => !v)} title="API keys" style={{ marginLeft: "auto", fontSize: 12, padding: "5px 8px", borderRadius: 7, border: "1px solid var(--border-strong,#d1d5db)", background: showKeys ? "var(--brand-soft,#eef2ff)" : "var(--surface,#fff)", color: "var(--text-2,#6b7280)", cursor: "pointer", display: "flex" }}>🔑</button>
+      </div>
+
+      {showKeys && (
+        <div style={{ padding: 10, borderBottom: "1px solid var(--border,#e5e7eb)", background: "var(--surface-2,#f3f4f6)", display: "grid", gap: 7, flexShrink: 0 }}>
+          <div style={{ fontSize: 11, color: "var(--text-2,#6b7280)", lineHeight: 1.4 }}>Keys locales de pruebas (este navegador). La IA de la empresa se configura en el <b>Portal Scale</b> y tiene prioridad.</div>
+          {PROVEEDORES.map((p) => { const empDef = !!(aiKeys || {})[p.id]; return (
+            <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ width: 48, fontSize: 11.5, fontWeight: 600, color: p.color }}>{p.nombre}</span>
+              {empDef ? <span style={{ flex: 1, fontSize: 11, color: "#1f9d4d" }}>✓ Configurada por la empresa</span>
+                : <input type="password" placeholder={p.id === "claude" ? "sk-ant-..." : p.id === "gpt" ? "sk-..." : "AIza..."} value={keysLocal[p.id] || ""} onChange={(e) => setKey(p.id, e.target.value)} style={{ flex: 1, fontSize: 12, padding: "5px 8px", borderRadius: 7, border: "1px solid var(--border-strong,#d1d5db)", background: "var(--surface,#fff)", color: "var(--text,#111)" }} />}
+            </div>
+          ); })}
+        </div>
+      )}
+
+      {/* Conversación */}
+      <div style={{ flex: 1, overflowY: "auto", padding: 12, display: "flex", flexDirection: "column", gap: 9 }}>
+        {!msgs.length && <div style={{ fontSize: 12.5, color: "var(--text-2,#6b7280)", lineHeight: 1.5, textAlign: "center", margin: "auto", padding: "0 8px" }}>
+          <Sparkles size={22} style={{ opacity: 0.5, marginBottom: 6 }} /><br />
+          Pregúntame o usa un <b>prompt</b>. Conozco la actividad reciente de tu equipo.
+        </div>}
+        {msgs.map((m, i) => (
+          <div key={i} style={{ alignSelf: m.rol === "user" ? "flex-end" : "flex-start", maxWidth: "85%" }}>
+            <div style={{ fontSize: 13, lineHeight: 1.45, padding: "8px 11px", borderRadius: 12, background: m.rol === "user" ? "var(--brand,#6366f1)" : "var(--surface-2,#f3f4f6)", color: m.rol === "user" ? "#fff" : "var(--text,#111)", border: m.rol === "user" ? "none" : "1px solid var(--border,#e5e7eb)", whiteSpace: "pre-wrap" }}>{m.texto}</div>
+            {m.acciones?.length > 0 && <div style={{ marginTop: 4, display: "grid", gap: 2 }}>{m.acciones.map((a, j) => <div key={j} style={{ fontSize: 10.5, color: "var(--text-2,#6b7280)" }}>✓ {a}</div>)}</div>}
+          </div>
+        ))}
+        {cargando && <div style={{ alignSelf: "flex-start", display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--text-2,#6b7280)" }}><Loader size={14} className="spin" />Pensando…</div>}
+        <div ref={endRef} />
+      </div>
+
+      <div style={{ display: "flex", gap: 8, padding: "10px 12px", borderTop: "1px solid var(--border,#e5e7eb)", flexShrink: 0 }}>
+        <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") enviar(); }} placeholder="Escribe a la IA…" disabled={cargando}
+          style={{ flex: 1, padding: "8px 11px", borderRadius: 10, border: "1px solid var(--border-strong,#d1d5db)", outline: "none", fontFamily: "inherit", fontSize: 13, background: "var(--surface-2,#f3f4f6)", color: "var(--text,#111)" }} />
+        <button onClick={() => enviar()} disabled={cargando || !input.trim()} style={{ background: input.trim() && !cargando ? "var(--brand,#6366f1)" : "var(--border-strong,#d1d5db)", color: "#fff", border: "none", borderRadius: 10, padding: "0 13px", cursor: input.trim() && !cargando ? "pointer" : "not-allowed", display: "flex", alignItems: "center" }}><Send size={15} /></button>
+      </div>
+    </div>
+  );
+}
+
 // ── ChatBase (componente principal) ─────────────────────────────────────────
 // Es el "centro de notificaciones": feed mezclado de chat + eventos de apps.
 // onEventoLocal(cmd): la app ejecuta un evento de SÍ MISMA (navegar al recurso).
 export const ChatBase = forwardRef(function ChatBase({
   sb, appId, empresa, currentUser, miembros = [],
   comandos = [], resolveAppUrl, onUnreadChange, onEventoLocal,
+  // IA integrada (opcional): heredada del Portal. Si `ia` falta o ia.enabled===false, no se muestra.
+  ia,
 }, ref) {
   const [open, setOpen] = useState(false);
   const [view, setView] = useState("feed");
@@ -492,6 +607,20 @@ export const ChatBase = forwardRef(function ChatBase({
 
   const otros = useMemo(() => miembros.filter(m => m.user_id !== myId), [miembros, myId]);
 
+  // Resumen del feed (notifs + últimos mensajes recibidos) como contexto para la IA.
+  const iaHabilitada = !!ia && ia.enabled !== false;
+  const feedTexto = useMemo(() => {
+    if (!iaHabilitada) return "";
+    const líneas = [];
+    (notifs || []).filter(n => n.actor_id !== myId).slice(0, 15).forEach(n =>
+      líneas.push(`• [${n.app_id}] ${n.titulo}${n.recurso_label ? " — " + n.recurso_label : ""} (${formatHora(n.created_at)})`));
+    allMessages.filter(m => m.to_user_id === myId).slice(-10).forEach(m => {
+      const de = otros.find(o => o.user_id === m.from_user_id);
+      líneas.push(`• Mensaje de ${de?.nombre || de?.email || "alguien"}: ${m.message}`);
+    });
+    return líneas.join("\n") || "Sin actividad reciente.";
+  }, [iaHabilitada, notifs, allMessages, myId, otros]);
+
   const handleSend = async (msg) => {
     const sent = await enviarMensaje(sb, companyId, myId, partner.user_id, msg);
     setAllMessages(prev => [...prev, { ...sent, is_read: false }]);
@@ -531,7 +660,7 @@ export const ChatBase = forwardRef(function ChatBase({
 
   const headerTitle = view === "conv" && partner
     ? (partner.nombre || partner.email || "Conversación")
-    : view === "list" ? "Nuevo mensaje" : "Notificaciones";
+    : view === "list" ? "Nuevo mensaje" : view === "ia" ? "Asistente IA" : "Notificaciones";
 
   return (
     <>
@@ -546,6 +675,12 @@ export const ChatBase = forwardRef(function ChatBase({
               ? <Activity size={18} color="#fff" />
               : <button onClick={() => { setView("feed"); setPartner(null); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#fff", padding: 0, display: "flex" }}><ArrowLeft size={18} /></button>}
             <span style={{ flex: 1, fontWeight: 700, fontSize: 14, color: "#fff" }}>{headerTitle}</span>
+            {view === "feed" && iaHabilitada && (
+              <button onClick={() => setView("ia")} title="Asistente IA"
+                style={{ background: "rgba(255,255,255,0.15)", border: "none", borderRadius: 8, cursor: "pointer", color: "#fff", padding: "4px 6px", display: "flex" }}>
+                <Sparkles size={15} />
+              </button>
+            )}
             {view === "feed" && (
               <button onClick={() => setView("list")} title="Nuevo mensaje"
                 style={{ background: "rgba(255,255,255,0.15)", border: "none", borderRadius: 8, cursor: "pointer", color: "#fff", padding: "4px 6px", display: "flex" }}>
@@ -569,6 +704,11 @@ export const ChatBase = forwardRef(function ChatBase({
             <ConvView partner={partner} messages={convMessages} myId={myId}
               onBack={() => { setView("feed"); setPartner(null); }} onSend={handleSend}
               miembros={otros} appId={appId} comandos={comandos} resolveAppUrl={resolveAppUrl} />
+          )}
+          {view === "ia" && iaHabilitada && (
+            <IAView aiProvider={ia.provider} aiKeys={ia.keys} system={ia.system}
+              prompts={ia.prompts || []} feedTexto={feedTexto} appId={appId}
+              tools={ia.tools || []} onTool={ia.onTool} />
           )}
         </div>
       )}
