@@ -22,7 +22,7 @@ import { cargarTodosMensajes, enviarMensaje, marcarLeidos, suscribirMensajes } f
 import { serializarToken, parsearMensaje, construirDeepLink, detectarAutocompletar } from "./commands.js";
 import { cargarNotificaciones, suscribirNotificaciones, cargarUltimaVez, marcarVistoAhora } from "./notifications.js";
 import { avatarColor, Avatar } from "./avatar.jsx";
-import { PROVEEDORES, cargarKeys, guardarKeys, llamarLLM } from "../ia/llm.js";
+import { PROVEEDORES, cargarKeys, guardarKeys, llamarLLM, llamarConFallback, esErrorCuota } from "../ia/llm.js";
 
 function formatHora(iso) {
   if (!iso) return "";
@@ -415,7 +415,7 @@ function ConvView({ partner, messages, myId, onBack, onSend, miembros, appId, co
 // ── Vista IA ─────────────────────────────────────────────────────────────────
 // Asistente integrado en el panel. Conoce el feed (notifs + mensajes recientes)
 // como contexto, ofrece prompts predefinidos por app y permite elegir proveedor.
-function IAView({ aiProvider, aiKeys, system, prompts = [], feedTexto, appId, onTool, tools = [] }) {
+function IAView({ aiProvider, aiKeys, aiOrden, system, prompts = [], feedTexto, appId, onTool, tools = [], onFallback }) {
   const [proveedor, setProveedor] = useState(aiProvider || "claude");
   const [keysLocal, setKeysLocal] = useState(cargarKeys);
   const [msgs, setMsgs] = useState([]);
@@ -440,9 +440,21 @@ function IAView({ aiProvider, aiKeys, system, prompts = [], feedTexto, appId, on
     const ctx = feedTexto ? `Actividad reciente que ha recibido el usuario (mensajes y eventos del equipo):\n${feedTexto}\n\n` : "";
     const hist = [{ role: "user", content: ctx + "Petición: " + texto }];
     const acciones = [];
+    const orden = aiOrden && aiOrden.length ? aiOrden : ["claude", "gpt", "gemini"];
+    const modeloDe = (id) => (PROVEEDORES.find((p) => p.id === id) || {}).modelo;
+    let activo = proveedor; // puede cambiar por fallback dentro del bucle
     try {
       for (let paso = 0; paso < (tools.length ? 6 : 1); paso++) {
-        const { text, toolCalls } = await llamarLLM(proveedor, { apiKey: keys[proveedor], modelo: prov.modelo, system, messages: hist, tools });
+        const r = await llamarConFallback({ prefer: activo, orden, keys, modeloDe, system, messages: hist, tools });
+        // Fallback aplicado: avisa al usuario y reporta al admin (temporal, no persiste).
+        if (r.cambioDesde && r.proveedorUsado !== activo) {
+          const nDe = (PROVEEDORES.find((p) => p.id === r.cambioDesde) || {}).nombre || r.cambioDesde;
+          const nA = (PROVEEDORES.find((p) => p.id === r.proveedorUsado) || {}).nombre || r.proveedorUsado;
+          setProveedor(r.proveedorUsado); activo = r.proveedorUsado;
+          setMsgs((m) => [...m, { rol: "sys", texto: `La IA «${nDe}» necesita ser revisada por el admin (sin tokens). Se cambió a «${nA}» para continuar con el servicio.` }]);
+          onFallback?.({ desde: r.cambioDesde, a: r.proveedorUsado, motivo: "sin_tokens" });
+        }
+        const { text, toolCalls } = r;
         if (!toolCalls.length || !onTool) { setMsgs((m) => [...m, { rol: "bot", texto: text || "Hecho.", acciones }]); break; }
         hist.push({ role: "assistant", content: [...(text ? [{ type: "text", text }] : []), ...toolCalls.map((tc) => ({ type: "tool_use", id: tc.id, name: tc.name, input: tc.input }))] });
         const results = [];
@@ -451,9 +463,9 @@ function IAView({ aiProvider, aiKeys, system, prompts = [], feedTexto, appId, on
         if (paso === 5) setMsgs((m) => [...m, { rol: "bot", texto: "Hecho (límite de pasos).", acciones }]);
       }
     } catch (e) {
-      const msg = e?.message || String(e);
-      const sinTokens = /\b429\b|quota|insufficient|billing|credit|exhaust|saldo|límite|limit reached|out of/i.test(msg);
-      setMsgs((m) => [...m, { rol: "bot", texto: sinTokens ? `La IA «${prov.nombre}» no tiene tokens (sin saldo o límite). Contacta con tu administrador para revisar la API de la empresa.` : "Error: " + msg }]);
+      if (e?.sinConfig) { setMsgs((m) => [...m, { rol: "bot", texto: "No hay ninguna IA configurada. El administrador debe añadir una API key en el Portal." }]); }
+      else if (esErrorCuota(e)) { onFallback?.({ desde: e.proveedorUsado || activo, a: null, motivo: "sin_tokens_todas" }); setMsgs((m) => [...m, { rol: "bot", texto: "Ninguna IA tiene tokens disponibles. Ponte en contacto con tu administrador para revisar las APIs de la empresa." }]); }
+      else setMsgs((m) => [...m, { rol: "bot", texto: "Error: " + (e?.message || e) }]);
     } finally { setCargando(false); }
   }
 
@@ -505,7 +517,9 @@ function IAView({ aiProvider, aiKeys, system, prompts = [], feedTexto, appId, on
           <Sparkles size={22} style={{ opacity: 0.5, marginBottom: 6 }} /><br />
           Pregúntame o usa un <b>prompt</b>. Conozco la actividad reciente de tu equipo.
         </div>}
-        {msgs.map((m, i) => (
+        {msgs.map((m, i) => m.rol === "sys" ? (
+          <div key={i} style={{ alignSelf: "center", maxWidth: "92%", fontSize: 11.5, lineHeight: 1.4, padding: "7px 10px", borderRadius: 9, background: "var(--warn-soft,#fff7ed)", color: "var(--warn,#b45309)", border: "1px solid var(--warn,#f59e0b)", display: "flex", gap: 6, alignItems: "flex-start" }}>⚠️ <span>{m.texto}</span></div>
+        ) : (
           <div key={i} style={{ alignSelf: m.rol === "user" ? "flex-end" : "flex-start", maxWidth: "85%" }}>
             <div style={{ fontSize: 13, lineHeight: 1.45, padding: "8px 11px", borderRadius: 12, background: m.rol === "user" ? "var(--brand,#6366f1)" : "var(--surface-2,#f3f4f6)", color: m.rol === "user" ? "#fff" : "var(--text,#111)", border: m.rol === "user" ? "none" : "1px solid var(--border,#e5e7eb)", whiteSpace: "pre-wrap" }}>{m.texto}</div>
             {m.acciones?.length > 0 && <div style={{ marginTop: 4, display: "grid", gap: 2 }}>{m.acciones.map((a, j) => <div key={j} style={{ fontSize: 10.5, color: "var(--text-2,#6b7280)" }}>✓ {a}</div>)}</div>}
@@ -706,9 +720,9 @@ export const ChatBase = forwardRef(function ChatBase({
               miembros={otros} appId={appId} comandos={comandos} resolveAppUrl={resolveAppUrl} />
           )}
           {view === "ia" && iaHabilitada && (
-            <IAView aiProvider={ia.provider} aiKeys={ia.keys} system={ia.system}
+            <IAView aiProvider={ia.provider} aiKeys={ia.keys} aiOrden={ia.orden} system={ia.system}
               prompts={ia.prompts || []} feedTexto={feedTexto} appId={appId}
-              tools={ia.tools || []} onTool={ia.onTool} />
+              tools={ia.tools || []} onTool={ia.onTool} onFallback={ia.onFallback} />
           )}
         </div>
       )}

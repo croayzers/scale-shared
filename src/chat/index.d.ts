@@ -36,13 +36,15 @@ export interface ChatBaseProps {
 
 // Config de la IA integrada en el panel (heredada del Portal Scale).
 export interface ChatIAConfig {
-  enabled?: boolean;                 // false = oculta la pestaña IA
+  enabled?: boolean;                 // false = oculta la pestaña IA (por app o por usuario)
   provider?: "claude" | "gpt" | "gemini" | null;  // habilitada en el Portal (predeterminada)
   keys?: { claude?: string; gpt?: string; gemini?: string };  // heredadas del Portal
+  orden?: Array<"claude" | "gpt" | "gemini">;  // preferencia de fallback (admin)
   system: string;                    // system prompt de la app
   prompts?: Array<string | { label: string; prompt: string }>;  // prompts predefinidos
   tools?: unknown[];                 // tool specs (opcional, para acciones)
   onTool?: (name: string, input: unknown) => { resumen?: string; error?: string; datos?: unknown };
+  onFallback?: (e: { desde: string; a: string | null; motivo: string }) => void;  // aviso de cambio de IA
 }
 
 export interface NotificacionInput {

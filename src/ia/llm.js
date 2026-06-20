@@ -128,9 +128,42 @@ async function llamarGemini({ apiKey, modelo, system, messages, tools }) {
 
 const safeParse = (s) => { try { return JSON.parse(s); } catch { return {}; } };
 
+// ¿el error indica falta de tokens/saldo/cuota (no un fallo de red o de petición)?
+export function esErrorCuota(e) {
+  const m = (e?.message || String(e || "")).toLowerCase();
+  return /\b429\b|quota|insufficient|billing|credit|exhaust|saldo|limit reached|out of|rate limit|payment|balance/.test(m);
+}
+
 // Punto de entrada: enruta al proveedor. Devuelve { text, toolCalls }.
 export async function llamarLLM(proveedorId, opts) {
   if (proveedorId === "gpt") return llamarGPT(opts);
   if (proveedorId === "gemini") return llamarGemini(opts);
   return llamarClaude(opts);
+}
+
+// Llama con FALLBACK automático: prueba el proveedor preferido y, si se queda
+// sin tokens (cuota), pasa al siguiente del `orden` que tenga key, hasta agotar.
+//   prefer  proveedor habilitado (predeterminado)
+//   orden   ["claude","gpt","gemini"] preferencia configurada por el admin
+//   keys    { claude, gpt, gemini }
+//   modeloDe(id) -> modelo a usar para ese proveedor
+// Devuelve { text, toolCalls, proveedorUsado, cambioDesde|null } o lanza si
+// ninguna IA con key responde (o el error no es de cuota -> se propaga).
+export async function llamarConFallback({ prefer, orden, keys, modeloDe, system, messages, tools }) {
+  // Cadena: el preferido primero, luego el resto del orden, solo los que tienen key.
+  const cadena = [prefer, ...(orden || ["claude", "gpt", "gemini"]).filter((p) => p !== prefer)]
+    .filter((p, i, a) => p && a.indexOf(p) === i && keys?.[p]);
+  if (!cadena.length) { const err = new Error("Sin ninguna IA configurada (faltan API keys)."); err.sinConfig = true; throw err; }
+  let cambioDesde = null;
+  for (let i = 0; i < cadena.length; i++) {
+    const id = cadena[i];
+    try {
+      const r = await llamarLLM(id, { apiKey: keys[id], modelo: modeloDe ? modeloDe(id) : undefined, system, messages, tools });
+      return { ...r, proveedorUsado: id, cambioDesde };
+    } catch (e) {
+      const ultimo = i === cadena.length - 1;
+      if (esErrorCuota(e) && !ultimo) { cambioDesde = cambioDesde || prefer; continue; } // pasa a la siguiente
+      e.proveedorUsado = id; e.cambioDesde = cambioDesde; throw e;
+    }
+  }
 }
