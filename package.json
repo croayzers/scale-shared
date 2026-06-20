@@ -8,7 +8,8 @@
     "./chat/lib": "./src/chat/data.js",
     "./chat/commands": "./src/chat/commands.js",
     "./registry": { "types": "./src/registry/index.d.ts", "default": "./src/registry/index.js" },
-    "./connectors": { "types": "./src/connectors/index.d.ts", "default": "./src/connectors/index.js" }
+    "./connectors": { "types": "./src/connectors/index.d.ts", "default": "./src/connectors/index.js" },
+    "./ia": { "types": "./src/ia/index.d.ts", "default": "./src/ia/index.js" }
   },
   "files": [
     "src"
